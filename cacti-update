@@ -1,4 +1,13 @@
 #!/bin/bash
+#########################################################################
+#  Script to update Cacti and/or all plugins indivudually or one-by-one #
+#  Edit the BASE_DIR to your cacti installation path                    #
+#  chmod +x, and execute with sudo ./cacti-update                       #
+#                                                                       #
+#  I am NOT a good code writer, this was with the help of AI after the  #
+#  intial design and uglyness that was the result of me smashing on my  #
+#  keyboard like a monkey                                               #
+#########################################################################
 
 clear
 
