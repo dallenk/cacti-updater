@@ -1,19 +1,8 @@
 #!/bin/bash
-#########################################################################
-#  Script to update Cacti and/or all plugins indivudually or one-by-one #
-#  Edit the BASE_DIR to your cacti installation path                    #
-#  chmod +x, and execute with sudo ./cacti-update                       #
-#                                                                       #
-#  I am NOT a good code writer, this was with the help of AI after the  #
-#  intial design and uglyness that was the result of me smashing on my  #
-#  keyboard like a monkey                                               #
-#########################################################################
 
-clear 
+clear
 
-set -euo pipefail
-
-# Colors
+# Colors (MUST come before set -u)
 RED="\033[31m"
 GREEN="\033[32m"
 YELLOW="\033[33m"
@@ -21,16 +10,24 @@ CYAN="\033[36m"
 MAGENTA="\033[35m"
 RESET="\033[0m"
 
+set -euo pipefail
+
+# --- CONFIGURABLE VARIABLES ---
+WEBUSER="www-data"  # <--- Set to your web server user (e.g. www-data, apache, www-root)
 BASE_DIR="/var/www/html/cacti"
 PLUGIN_DIR="${BASE_DIR}/plugins"
+DB_BACKUP_DIR="./"   # <--- Change as you prefer
+# --- 
+
+
 FAILED_PLUGINS=()
 
 get_remote_hash() {
     local repo="$1"
-    sudo -u www-data git -C "$repo" fetch --quiet
-    REMOTE_TRACK=$(sudo -u www-data git -C "$repo" rev-parse --abbrev-ref --symbolic-full-name "@{u}" 2>/dev/null)
+    sudo -u "$WEBUSER" git -C "$repo" fetch --quiet
+    REMOTE_TRACK=$(sudo -u "$WEBUSER" git -C "$repo" rev-parse --abbrev-ref --symbolic-full-name "@{u}" 2>/dev/null)
     if [ -n "$REMOTE_TRACK" ]; then
-        sudo -u www-data git -C "$repo" log -1 --pretty=format:"%h" "$REMOTE_TRACK" 2>/dev/null | tr -d '[:space:]'
+        sudo -u "$WEBUSER" git -C "$repo" log -1 --pretty=format:"%h" "$REMOTE_TRACK" 2>/dev/null | tr -d '[:space:]'
     else
         echo "N/A"
     fi
@@ -60,12 +57,12 @@ view_plugins_and_branches() {
 
     # --- Cacti core info ---
     CACTI_NAME="cacti"
-    CACTI_BRANCH=$(sudo -u www-data git -C "$BASE_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+    CACTI_BRANCH=$(sudo -u "$WEBUSER" git -C "$BASE_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
     CACTI_REMOTE_HASH=$(get_remote_hash "$BASE_DIR")
     [ -z "$CACTI_REMOTE_HASH" ] && CACTI_REMOTE_HASH="N/A"
-    CACTI_LOCAL_HASH=$(sudo -u www-data git -C "$BASE_DIR" rev-parse --short HEAD 2>/dev/null | tr -d '[:space:]')
+    CACTI_LOCAL_HASH=$(sudo -u "$WEBUSER" git -C "$BASE_DIR" rev-parse --short HEAD 2>/dev/null | tr -d '[:space:]')
     [ -z "$CACTI_LOCAL_HASH" ] && CACTI_LOCAL_HASH="N/A"
-    CACTI_LOCAL_DESC=$(sudo -u www-data git -C "$BASE_DIR" log -1 --pretty=format:"%s" 2>/dev/null)
+    CACTI_LOCAL_DESC=$(sudo -u "$WEBUSER" git -C "$BASE_DIR" log -1 --pretty=format:"%s" 2>/dev/null)
     [ -z "$CACTI_LOCAL_DESC" ] && CACTI_LOCAL_DESC="N/A"
 
     if [[ "$CACTI_LOCAL_HASH" != "N/A" && "$CACTI_REMOTE_HASH" != "N/A" ]]; then
@@ -92,12 +89,12 @@ view_plugins_and_branches() {
         PLUGIN_NAME=$(basename "$PLUGIN")
         [ ${#PLUGIN_NAME} -gt $name_w ] && name_w=${#PLUGIN_NAME}
         if [ -d "${PLUGIN}/.git" ]; then
-            BRANCH=$(sudo -u www-data git -C "$PLUGIN" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+            BRANCH=$(sudo -u "$WEBUSER" git -C "$PLUGIN" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
             REMOTE_HASH=$(get_remote_hash "$PLUGIN")
             [ -z "$REMOTE_HASH" ] && REMOTE_HASH="N/A"
-            LOCAL_HASH=$(sudo -u www-data git -C "$PLUGIN" rev-parse --short HEAD 2>/dev/null | tr -d '[:space:]')
+            LOCAL_HASH=$(sudo -u "$WEBUSER" git -C "$PLUGIN" rev-parse --short HEAD 2>/dev/null | tr -d '[:space:]')
             [ -z "$LOCAL_HASH" ] && LOCAL_HASH="N/A"
-            LOCAL_DESC=$(sudo -u www-data git -C "$PLUGIN" log -1 --pretty=format:"%s" 2>/dev/null)
+            LOCAL_DESC=$(sudo -u "$WEBUSER" git -C "$PLUGIN" log -1 --pretty=format:"%s" 2>/dev/null)
             [ -z "$LOCAL_DESC" ] && LOCAL_DESC="N/A"
             if [[ "$LOCAL_HASH" != "N/A" && "$REMOTE_HASH" != "N/A" ]]; then
                 if [[ "$LOCAL_HASH" == "$REMOTE_HASH" ]]; then
@@ -146,7 +143,7 @@ view_plugins_and_branches() {
     idx=1
     for PLUGIN in "${PLUGIN_LIST[@]}"; do
         PLUGIN_NAME=$(basename "$PLUGIN")
-        BRANCH=$(sudo -u www-data git -C "$PLUGIN" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+        BRANCH=$(sudo -u "$WEBUSER" git -C "$PLUGIN" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
         REMOTE_HASH="${plugin_remote_hash[$PLUGIN]}"
         LOCAL_HASH="${plugin_local_hash[$PLUGIN]}"
         LOCAL_DESC="${plugin_commit_desc[$PLUGIN]}"
@@ -159,71 +156,15 @@ view_plugins_and_branches() {
 
     # Only prompt if interactive
     if [ "$interactive" == "true" ]; then
-        echo -en "${CYAN}Enter the number of a plugin/core to change its branch, or just Enter to return: ${RESET}"
-        read -r pnum
-        [[ "$pnum" =~ ^[Qq]$ || -z "$pnum" ]] && return
-        if [[ "$pnum" =~ ^[0-9]+$ && "$pnum" -ge 0 && "$pnum" -le "${#PLUGIN_LIST[@]}" ]]; then
-            if [ "$pnum" -eq 0 ]; then
-                REPO="$BASE_DIR"
-                REPO_NAME="cacti"
-            else
-                REPO="${PLUGIN_LIST[$((pnum-1))]}"
-                REPO_NAME=$(basename "$REPO")
-            fi
-            REMOTE_BRANCHES=($(sudo -u www-data git -C "$REPO" branch -r 2>/dev/null | awk '/origin\// && $1 !~ /->/ { gsub(/^.*origin\//, "", $1); if (tolower($1) != "head") print $1 }' | sort -u))
-            if [ "${#REMOTE_BRANCHES[@]}" -eq 0 ]; then
-                echo -e "${RED}No remote branches found for this repo.${RESET}"
-                echo -en "${YELLOW}Press Enter to return to menu...${RESET}"; read -r
-                return
-            fi
-            echo -e "${CYAN}Remote branches for ${YELLOW}$REPO_NAME${CYAN}:${RESET}"
-            for i in "${!REMOTE_BRANCHES[@]}"; do
-                printf "${YELLOW}%2d.${RESET} %s\n" "$((i+1))" "${REMOTE_BRANCHES[$i]}"
-            done
-            echo -en "${CYAN}Enter branch name or number to switch to (or Q to quit): ${RESET}"
-            read -r bsel
-            [[ "$bsel" =~ ^[Qq]$ || -z "$bsel" ]] && return
-            if [[ "$bsel" =~ ^[0-9]+$ && "$bsel" -ge 1 && "$bsel" -le "${#REMOTE_BRANCHES[@]}" ]]; then
-                NEW_BRANCH="${REMOTE_BRANCHES[$((bsel-1))]}"
-            else
-                NEW_BRANCH="$bsel"
-                MATCH=0
-                for rbranch in "${REMOTE_BRANCHES[@]}"; do
-                    [ "$rbranch" == "$NEW_BRANCH" ] && MATCH=1
-                done
-                if [ $MATCH -eq 0 ]; then
-                    echo -e "${RED}Branch not found on remote.${RESET}"
-                    echo -en "${YELLOW}Press Enter to return to menu...${RESET}"; read -r
-                    return
-                fi
-            fi
-            echo -e "${CYAN}Switching ${YELLOW}$REPO_NAME${CYAN} to branch ${YELLOW}$NEW_BRANCH${CYAN}...${RESET}"
-            pushd "$REPO" > /dev/null
-            sudo -u www-data git fetch
-            if sudo -u www-data git checkout "$NEW_BRANCH" 2>/dev/null; then
-                sudo -u www-data git pull
-                echo -e "${GREEN}Now on branch: $NEW_BRANCH${RESET}"
-            else
-                if sudo -u www-data git checkout -b "$NEW_BRANCH" "origin/$NEW_BRANCH"; then
-                    sudo -u www-data git pull
-                    echo -e "${GREEN}Created and switched to tracking branch: $NEW_BRANCH${RESET}"
-                else
-                    echo -e "${RED}Failed to switch to branch: $NEW_BRANCH${RESET}"
-                fi
-            fi
-            popd > /dev/null
-            echo -en "${YELLOW}Press Enter to return to menu...${RESET}"; read -r
-        else
-            echo -e "${RED}Invalid selection.${RESET}"
-            echo -en "${YELLOW}Press Enter to return to menu...${RESET}"; read -r
-        fi
+        # NO prompt (per user request) -- just return to menu
+        return
     fi
 }
 
 update_cacti() {
     echo -e "${CYAN}Navigating to Cacti base directory and pulling latest changes...${RESET}"
     pushd "$BASE_DIR" > /dev/null
-    if ! sudo -u www-data git pull; then
+    if ! sudo -u "$WEBUSER" git pull; then
         echo -e "${RED}Failed to pull in $BASE_DIR${RESET}"
         popd > /dev/null
         return 1
@@ -231,10 +172,10 @@ update_cacti() {
     popd > /dev/null
     echo -e "${YELLOW}-----------------------------${RESET}"
     pushd "$BASE_DIR" > /dev/null
-    BRANCH=$(sudo -u www-data git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+    BRANCH=$(sudo -u "$WEBUSER" git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
     echo -e "${CYAN}Branch:${RESET} $BRANCH"
     echo -en "${CYAN}Latest commit:${RESET} "
-    sudo -u www-data git log -n 1 --pretty=format:"%h - %an, %ar : %s" || echo -e "${RED}No commits found.${RESET}"
+    sudo -u "$WEBUSER" git log -n 1 --pretty=format:"%h - %an, %ar : %s" || echo -e "${RED}No commits found.${RESET}"
     echo
     popd > /dev/null
     echo -e "${GREEN}Cacti core update complete!${RESET}"
@@ -277,21 +218,108 @@ update_single_plugin() {
     local PLUGIN="$1"
     echo -e "${GREEN}Updating plugin:${RESET} $PLUGIN"
     pushd "$PLUGIN" > /dev/null
-    if ! sudo -u www-data git pull; then
+    if ! sudo -u "$WEBUSER" git pull; then
         echo -e "${RED}Failed to pull in $PLUGIN${RESET}"
     fi
     popd > /dev/null
     echo -e "${YELLOW}-----------------------------${RESET}"
 }
 
-run_database_upgrade() {
-    echo -e "${CYAN}Running Cacti database upgrade...${RESET}"
-    sudo -u www-data php "${BASE_DIR}/cli/upgrade_database.php" --forcever=1.2.29
-    local rc=$?
-    if [ $rc -eq 0 ]; then
-        echo -e "${GREEN}Database upgrade completed successfully!${RESET}"
+change_branch_menu() {
+    # Show versions with interactive prompt for branch changing
+    view_plugins_and_branches true
+    echo -en "${CYAN}Enter the number of a plugin/core to change its branch, or just Enter to return: ${RESET}"
+    read -r pnum
+    local PLUGIN_LIST=()
+    for PLUGIN in "$PLUGIN_DIR"/*/; do
+        [ -d "$PLUGIN/.git" ] && PLUGIN_LIST+=("$PLUGIN")
+    done
+    # Add core (cacti) as item 0
+    if [[ "$pnum" =~ ^[Qq]$ || -z "$pnum" ]]; then
+        return
+    elif [[ "$pnum" =~ ^[0-9]+$ && "$pnum" -ge 0 && "$pnum" -le "${#PLUGIN_LIST[@]}" ]]; then
+        if [ "$pnum" -eq 0 ]; then
+            REPO="$BASE_DIR"
+            REPO_NAME="cacti"
+        else
+            REPO="${PLUGIN_LIST[$((pnum-1))]}"
+            REPO_NAME=$(basename "$REPO")
+        fi
+        REMOTE_BRANCHES=($(sudo -u "$WEBUSER" git -C "$REPO" branch -r 2>/dev/null | awk '/origin\// && $1 !~ /->/ { gsub(/^.*origin\//, "", $1); if (tolower($1) != "head") print $1 }' | sort -u))
+        if [ "${#REMOTE_BRANCHES[@]}" -eq 0 ]; then
+            echo -e "${RED}No remote branches found for this repo.${RESET}"
+            echo -en "${YELLOW}Press Enter to return to menu...${RESET}"; read -r
+            return
+        fi
+        echo -e "${CYAN}Remote branches for ${YELLOW}$REPO_NAME${CYAN}:${RESET}"
+        for i in "${!REMOTE_BRANCHES[@]}"; do
+            printf "${YELLOW}%2d.${RESET} %s\n" "$((i+1))" "${REMOTE_BRANCHES[$i]}"
+        done
+        echo -en "${CYAN}Enter branch name or number to switch to (or Q to quit): ${RESET}"
+        read -r bsel
+        [[ "$bsel" =~ ^[Qq]$ || -z "$bsel" ]] && return
+        if [[ "$bsel" =~ ^[0-9]+$ && "$bsel" -ge 1 && "$bsel" -le "${#REMOTE_BRANCHES[@]}" ]]; then
+            NEW_BRANCH="${REMOTE_BRANCHES[$((bsel-1))]}"
+        else
+            NEW_BRANCH="$bsel"
+            MATCH=0
+            for rbranch in "${REMOTE_BRANCHES[@]}"; do
+                [ "$rbranch" == "$NEW_BRANCH" ] && MATCH=1
+            done
+            if [ $MATCH -eq 0 ]; then
+                echo -e "${RED}Branch not found on remote.${RESET}"
+                echo -en "${YELLOW}Press Enter to return to menu...${RESET}"; read -r
+                return
+            fi
+        fi
+        echo -e "${CYAN}Switching ${YELLOW}$REPO_NAME${CYAN} to branch ${YELLOW}$NEW_BRANCH${CYAN}...${RESET}"
+        pushd "$REPO" > /dev/null
+        sudo -u "$WEBUSER" git fetch
+        if sudo -u "$WEBUSER" git checkout "$NEW_BRANCH" 2>/dev/null; then
+            sudo -u "$WEBUSER" git pull
+            echo -e "${GREEN}Now on branch: $NEW_BRANCH${RESET}"
+        else
+            if sudo -u "$WEBUSER" git checkout -b "$NEW_BRANCH" "origin/$NEW_BRANCH"; then
+                sudo -u "$WEBUSER" git pull
+                echo -e "${GREEN}Created and switched to tracking branch: $NEW_BRANCH${RESET}"
+            else
+                echo -e "${RED}Failed to switch to branch: $NEW_BRANCH${RESET}"
+            fi
+        fi
+        popd > /dev/null
+        echo -en "${YELLOW}Press Enter to return to menu...${RESET}"; read -r
     else
-        echo -e "${RED}Database upgrade failed with exit code $rc.${RESET}"
+        echo -e "${RED}Invalid selection.${RESET}"
+        echo -en "${YELLOW}Press Enter to return to menu...${RESET}"; read -r
+    fi
+}
+
+upgrade_cacti_db() {
+    echo -e "${CYAN}Running forced Cacti DB upgrade...${RESET}"
+    sudo -u "$WEBUSER" php "$BASE_DIR/cli/upgrade_database.php" --forcever=1.2.29
+    local status=$?
+    if [ $status -eq 0 ]; then
+        echo -e "${GREEN}Cacti database upgrade complete!${RESET}"
+    else
+        echo -e "${RED}Cacti database upgrade failed!${RESET}"
+    fi
+}
+
+backup_cacti_db() {
+    echo -en "${CYAN}Enter database name to backup: ${RESET}"
+    read -r DB_NAME
+    echo -en "${CYAN}Enter MySQL username: ${RESET}"
+    read -r DB_USER
+    echo -en "${CYAN}Enter MySQL host [localhost]: ${RESET}"
+    read -r DB_HOST
+    [ -z "$DB_HOST" ] && DB_HOST="localhost"
+    BACKUP_FILE="${DB_BACKUP_DIR}/${DB_NAME}_backup_$(date +%F_%H%M%S).sql"
+    echo -e "${CYAN}Backing up database to:${RESET} $BACKUP_FILE"
+    mysqldump -h "$DB_HOST" -u "$DB_USER" -p "$DB_NAME" > "$BACKUP_FILE"
+    if [ $? -eq 0 ]; then
+        echo -e "${GREEN}Backup successful!${RESET}"
+    else
+        echo -e "${RED}Backup failed!${RESET}"
     fi
 }
 
@@ -304,7 +332,8 @@ while true; do
     echo -e "${YELLOW}2.${RESET} Update Cacti (core repo only)"
     echo -e "${YELLOW}3.${RESET} Update Plugins (choose plugin, or all)"
     echo -e "${YELLOW}4.${RESET} Change branch for Cacti/core or plugin"
-    echo -e "${YELLOW}5.${RESET} Run database upgrade (force version 1.2.29)"
+    echo -e "${YELLOW}5.${RESET} Force Cacti DB Upgrade"
+    echo -e "${YELLOW}6.${RESET} Backup Cacti Database"
     echo -e "${YELLOW}Q.${RESET} Quit"
     echo -en "${CYAN}Select an option: ${RESET}"
     read -r menu_choice
@@ -321,10 +350,13 @@ while true; do
             update_plugins_menu
             ;;
         4)
-            view_plugins_and_branches true
+            change_branch_menu
             ;;
         5)
-            run_database_upgrade
+            upgrade_cacti_db
+            ;;
+        6)
+            backup_cacti_db
             ;;
         [Qq])
             echo -e "${CYAN}Exiting.${RESET}"
